@@ -1,0 +1,5 @@
+{
+  "created_at": "2026-01-22_02-19-29",
+  "strategy": "momentum_backtest_top_n_100_lookback_5",
+  "n_days": 172
+}
