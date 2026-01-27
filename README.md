@@ -1,2 +1,2 @@
-# ML_practice
-A repository to store python scripts as I self-learn ML methods
+# Self_Directed_Projects
+A repository to store self-directed projects.
