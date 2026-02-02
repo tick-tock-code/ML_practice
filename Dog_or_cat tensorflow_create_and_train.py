@@ -86,10 +86,11 @@ def normalize_image(image_path):
     else:
         raise ValueError("Unsupported bit depth")
 
-
-
-
 """ Unused Ends"""
+
+
+
+# --- Data Augmentation Functions --- 
 
 def rotate_image(image, angle_in):
     """Rotates the image by a given angle."""
@@ -125,6 +126,8 @@ def augment_image(image, label):
 
     return rotated_aug_images, rotated__aug_labels
 
+
+# --- Getting image paths and labels from filenames ---
 def get_image_paths_and_labels(data_dir):
     """
     Gets image paths and labels from filenames in a directory.
@@ -164,6 +167,7 @@ def get_image_paths_and_labels(data_dir):
     return image_paths, labels
 
 
+# --- Loading and preprocessing images ---
 def load_image(image_path, label, img_height, img_width):
     image = tf.io.read_file(image_path)
     image = tf.image.decode_jpeg(image, channels=3) # Or decode_png if using png
@@ -171,6 +175,7 @@ def load_image(image_path, label, img_height, img_width):
     image = tf.image.resize(image, (img_height, img_width))
     return image, label
 
+# --- Creating tf.data.Dataset ---
 def create_dataset(image_paths, labels, img_height, img_width, batch_size):
     """Creates a tf.data.Dataset from image paths and labels."""
 
@@ -208,7 +213,7 @@ def create_dataset(image_paths, labels, img_height, img_width, batch_size):
 
 
 
-
+# --- Checking for corrupted images ---
 def check_image_old(filename):
   try:
     with Image.open(filename) as img:
@@ -333,7 +338,6 @@ if image_paths: #check if any images were found
     batch_size = 32
     dataset, unique_labels, num_classes = create_dataset(image_paths, labels, img_height, img_width, batch_size)
     print(unique_labels)
-
 
     # Print shapes of a single batch shape = (batch_size, x,y,rgb_depth)
     for images, labels in dataset.take(1):
