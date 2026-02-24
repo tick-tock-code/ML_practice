@@ -5,6 +5,7 @@ from in large-cap US equities using daily OHLCV data.
 Data:
  - Top 100 S&P Constituents (Wikipedia)
  - Historical prices via Yahoo Finance
+ - Past 4 years of market data used
 
 
 Methodology:
@@ -20,8 +21,9 @@ Methodology:
 
 
 Key Results:
-- Annualized Sharpe: ~1 for a 252 day lookback, 
-- Annualised Returns: 
+- Annualized Sharpe: ~0.75 for  {momentum strategy, 252 day lookback, 10 day volatility window, partial rebalance = 0.18}
+- Annualised Returns: 4.79%
 - Transaction costs as a percentage of traded volume restrict returns for highly fluctuating signals.
+
 
 
