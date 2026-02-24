@@ -1,3 +1,4 @@
+Aims:
 This project investigates an alpha using momentum/reversion of returns 
 from in large-cap US equities using daily OHLCV data.
 
@@ -22,4 +23,5 @@ Key Results:
 - Annualized Sharpe: ~1 for a 252 day lookback, 
 - Annualised Returns: 
 - Transaction costs as a percentage of traded volume restrict returns for highly fluctuating signals.
+
 
