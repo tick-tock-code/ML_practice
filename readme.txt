@@ -1,23 +1,25 @@
-This project investigates a short-horizon alpha using momentum of returns 
-from a 5 day averaging window in large-cap US equities using daily OHLCV data.
+This project investigates an alpha using momentum/reversion of returns 
+from in large-cap US equities using daily OHLCV data.
 
 Data:
  - Top 100 S&P Constituents (Wikipedia)
  - Historical prices via Yahoo Finance
 
 
-
 Methodology:
 - Daily cross-sectional ranking by past k-day returns
 - Long-short investment from linear ranking (-0.5 to +0.5)
-- Daily rebalancing
+- Daily rebalancing (with decay)
 - Transaction costs: 5 bps per turnover
+- Iterated parameters: 
+   Strategy kind: mean reversion or momentum
+   Lookback window: time window (days) for calculating mean 
+   Volatility window: time window (days) for calculating volatility
+   Partial rebalance: for including decay to instrument weightings
+
 
 Key Results:
-- Annualized Sharpe:
-- 
-- 
+- Annualized Sharpe: ~1 for a 252 day lookback, 
+- Annualised Returns: 
+- Transaction costs as a percentage of traded volume restrict returns for highly fluctuating signals.
 
-Limitations:
-- 
-- Yahoo Finance data quality (?)
