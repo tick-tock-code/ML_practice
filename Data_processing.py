@@ -120,7 +120,7 @@ def compute_returns(df, vol_window=20, eps=1e-8):
 
 
 # Cross sectional ranking - basic price reversion
-def cross_sectional_signal(returns, kind = "mean_reversion", lookback=5, vol_window=20):
+def cross_sectional_signal(returns, kind = "mean_reversion", lookback=5, vol_window=20, ranking_method="percentile"):
     # making sure df is in correct format
     df = returns.copy()
     df.index = pd.to_datetime(df.index, dayfirst=True)
@@ -130,16 +130,19 @@ def cross_sectional_signal(returns, kind = "mean_reversion", lookback=5, vol_win
     r_cc = df['r_cc']
 
     # require full lookback and vol_window to produce values
-    cum_r_cc = r_cc.rolling(window=lookback, min_periods=lookback).sum()
-    vol = r_cc.rolling(window=vol_window, min_periods=vol_window).std()
-    signal = cum_r_cc  # / vol # room to clip signal if needed
+    cum_r_cc = r_cc.rolling(window=lookback).sum()
+    vol = r_cc.rolling(window=vol_window).std()
+    signal = cum_r_cc  / vol # room to clip signal if needed
 
     # choose sign convention
     if kind == "mean_reversion":
         signal = -signal
 
     # rank cross-sectionally per date (rows are dates)
-    ranks = signal.rank(axis=1, pct=True, method='average', na_option='keep')
+    if ranking_method == "percentile":
+        ranks = signal.rank(axis=1, pct=True, method='average', na_option='keep')
+    elif ranking_method == "zscore":
+        ranks = weights_zscore(signal)
     return ranks
 
 
@@ -307,7 +310,7 @@ def run_and_record(run_index, params, signals, processed_data, tc_bps, days_per_
         **params
     )
 
-    # Save results via existing helper (assumed to return outdir string)
+    # Save results via existing helper
     outdir = save_backtest_results(backtest_results, base_dir=data_dir, name=run_name)
 
     # ensure outdir exists and write params to disk
@@ -316,10 +319,6 @@ def run_and_record(run_index, params, signals, processed_data, tc_bps, days_per_
     except Exception:
         # dp.save_backtest_results may already create it; ignore failure
         pass
-
-    params_path = os.path.join(outdir, "run_params.json")
-    with open(params_path, "w", encoding="utf-8") as f:
-        json.dump(params, f, indent=2)
 
     print(f"Saved backtest to {outdir}")
 

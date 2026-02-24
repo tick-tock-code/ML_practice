@@ -73,7 +73,7 @@ def get_stock_prices(start_date, list_of_tickers, end_date_back=0):
     return data
 
 def get_date_n_days_ago_str(n):
-    """Returns the date 61 days ago as a string in 'YYYY-MM-DD' format."""
+    """Returns the date n days ago as a string in 'YYYY-MM-DD' format."""
     today = datetime.date.today()
     delta = datetime.timedelta(days=n)
     past_date = today - delta
