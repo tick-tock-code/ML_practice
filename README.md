@@ -29,13 +29,19 @@ C:\ProgramData\anaconda3\envs\torch_env2\python.exe -m quant_rnn data --years 10
 Train models:
 
 ```powershell
-C:\ProgramData\anaconda3\envs\torch_env2\python.exe -m quant_rnn train --models rnn,lstm,tcn --sequence-length 60 --epochs 50
+C:\ProgramData\anaconda3\envs\torch_env2\python.exe -m quant_rnn train --models rnn,lstm,tcn --sequence-length 60 --epochs 50 --early-stopping-patience 5
 ```
 
 Evaluate on the test set:
 
 ```powershell
-C:\ProgramData\anaconda3\envs\torch_env2\python.exe -m quant_rnn evaluate --models rnn,lstm,tcn --strategies rank_long_short,zscore
+C:\ProgramData\anaconda3\envs\torch_env2\python.exe -m quant_rnn evaluate --models rnn,lstm,tcn --strategies rank_long_short,zscore --baselines cash_zero,equal_weight,momentum_12_1
+```
+
+Run expanding-window walk-forward research:
+
+```powershell
+C:\ProgramData\anaconda3\envs\torch_env2\python.exe -m quant_rnn walk-forward --models rnn,lstm,tcn --initial-train-years 6 --val-years 1 --test-years 1 --step-years 1
 ```
 
 ## Defaults
@@ -48,6 +54,8 @@ C:\ProgramData\anaconda3\envs\torch_env2\python.exe -m quant_rnn evaluate --mode
 - Models: RNN, LSTM, TCN.
 - Test trading rules: rank long-short and z-score weights.
 - Transaction cost: 5 bps per unit turnover.
+- Baselines: zero prediction, equal-weight long-only, and fixed 12-1 momentum.
+- Early stopping: validation MSE patience of 5 epochs by default.
 
 ## Important Leakage Rules
 
@@ -57,6 +65,7 @@ C:\ProgramData\anaconda3\envs\torch_env2\python.exe -m quant_rnn evaluate --mode
 - Feature scaling is fit on train rows only, then applied to train/val/test.
 - Validation/test sequences may use earlier historical features as context, but their labels stay in their assigned split.
 - Cross-sectional ranking/z-scoring is done within each signal date only.
+- Walk-forward mode fits a fresh scaler on each fold's train rows only.
 
 ## Repository Map
 
@@ -69,6 +78,8 @@ quant_rnn/
 |-- training.py      # PyTorch training loop and checkpoint writing
 |-- evaluation.py    # test-set predictions and evaluation orchestration
 |-- backtest.py      # rank and z-score strategy logic
+|-- baselines.py     # zero, equal-weight, and momentum baseline providers
+|-- walk_forward.py  # expanding-window retraining/evaluation
 |-- metrics.py       # regression/directional metrics
 `-- io.py            # JSON and directory helpers
 
@@ -86,3 +97,10 @@ Run the test suite:
 ```powershell
 C:\ProgramData\anaconda3\envs\torch_env2\python.exe -m unittest discover -s tests
 ```
+
+## Momentum References
+
+- Jegadeesh and Titman, 1993, "Returns to Buying Winners and Selling Losers": [EconPapers](https://econpapers.repec.org/RePEc%3Abla%3Ajfinan%3Av%3A48%3Ay%3A1993%3Ai%3A1%3Ap%3A65-91)
+- Moskowitz, Ooi, and Pedersen, 2012, "Time Series Momentum": [EconPapers](https://econpapers.repec.org/RePEc%3Aeee%3Ajfinec%3Av%3A104%3Ay%3A2012%3Ai%3A2%3Ap%3A228-250)
+- Asness, Moskowitz, and Pedersen, 2013, "Value and Momentum Everywhere": [SSRN](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=1363476)
+- Hurst, Ooi, and Pedersen, 2017, "A Century of Evidence on Trend-Following Investing": [SSRN](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2993026)

@@ -5,6 +5,7 @@ import argparse
 from .data import run_data_stage
 from .evaluation import run_evaluate_stage
 from .training import run_train_stage
+from .walk_forward import run_walk_forward_stage
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -37,6 +38,8 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--num-layers", type=int, default=1)
     train.add_argument("--dropout", type=float, default=0.0)
     train.add_argument("--tcn-kernel-size", type=int, default=3)
+    train.add_argument("--early-stopping-patience", type=int, default=5)
+    train.add_argument("--early-stopping-min-delta", type=float, default=0.0)
     train.add_argument("--device", default="auto")
     train.add_argument("--seed", type=int, default=42)
     train.set_defaults(func=run_train_stage)
@@ -46,6 +49,7 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--run-dir", default=None)
     evaluate.add_argument("--models", default=None)
     evaluate.add_argument("--strategies", default="rank_long_short,zscore")
+    evaluate.add_argument("--baselines", default="cash_zero,equal_weight,momentum_12_1")
     evaluate.add_argument("--batch-size", type=int, default=512)
     evaluate.add_argument("--tc-bps", type=float, default=5.0)
     evaluate.add_argument("--low-quantile", type=float, default=0.2)
@@ -53,6 +57,34 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--gross-exposure", type=float, default=1.0)
     evaluate.add_argument("--device", default="auto")
     evaluate.set_defaults(func=run_evaluate_stage)
+
+    walk = subparsers.add_parser("walk-forward", help="Run expanding-window train/validate/test research folds.")
+    walk.add_argument("--data-dir", default="data")
+    walk.add_argument("--run-dir", default=None)
+    walk.add_argument("--models", default="rnn,lstm,tcn")
+    walk.add_argument("--baselines", default="cash_zero,equal_weight,momentum_12_1")
+    walk.add_argument("--strategies", default="rank_long_short,zscore")
+    walk.add_argument("--initial-train-years", type=int, default=6)
+    walk.add_argument("--val-years", type=int, default=1)
+    walk.add_argument("--test-years", type=int, default=1)
+    walk.add_argument("--step-years", type=int, default=1)
+    walk.add_argument("--sequence-length", type=int, default=60)
+    walk.add_argument("--epochs", type=int, default=50)
+    walk.add_argument("--batch-size", type=int, default=256)
+    walk.add_argument("--learning-rate", type=float, default=1e-3)
+    walk.add_argument("--hidden-size", type=int, default=64)
+    walk.add_argument("--num-layers", type=int, default=1)
+    walk.add_argument("--dropout", type=float, default=0.0)
+    walk.add_argument("--tcn-kernel-size", type=int, default=3)
+    walk.add_argument("--early-stopping-patience", type=int, default=5)
+    walk.add_argument("--early-stopping-min-delta", type=float, default=0.0)
+    walk.add_argument("--tc-bps", type=float, default=5.0)
+    walk.add_argument("--low-quantile", type=float, default=0.2)
+    walk.add_argument("--high-quantile", type=float, default=0.8)
+    walk.add_argument("--gross-exposure", type=float, default=1.0)
+    walk.add_argument("--device", default="auto")
+    walk.add_argument("--seed", type=int, default=42)
+    walk.set_defaults(func=run_walk_forward_stage)
 
     return parser
 

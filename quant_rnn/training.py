@@ -50,11 +50,14 @@ def train_model(
     epochs: int,
     learning_rate: float,
     checkpoint_path: Path,
+    early_stopping_patience: int | None = 5,
+    early_stopping_min_delta: float = 0.0,
 ) -> list[dict[str, float]]:
     model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     loss_fn = nn.MSELoss()
     best_val = float("inf")
+    epochs_without_improvement = 0
     history: list[dict[str, float]] = []
 
     for epoch in range(1, epochs + 1):
@@ -75,12 +78,23 @@ def train_model(
             "epoch": epoch,
             "train_loss": float(np.mean(train_losses)) if train_losses else float("nan"),
             **{f"val_{key}": value for key, value in val_metrics.items()},
+            "best_val_mse": best_val,
+            "epochs_without_improvement": epochs_without_improvement,
+            "early_stop_triggered": False,
         }
-        history.append(row)
-        if row["val_mse"] < best_val:
+        if row["val_mse"] < best_val - early_stopping_min_delta:
             best_val = row["val_mse"]
+            epochs_without_improvement = 0
             checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
             torch.save(model.state_dict(), checkpoint_path)
+        else:
+            epochs_without_improvement += 1
+        row["best_val_mse"] = best_val
+        row["epochs_without_improvement"] = epochs_without_improvement
+        history.append(row)
+        if early_stopping_patience is not None and epochs_without_improvement >= early_stopping_patience:
+            row["early_stop_triggered"] = True
+            break
     return history
 
 
@@ -124,6 +138,8 @@ def run_train_stage(args) -> int:
         "num_layers": args.num_layers,
         "dropout": args.dropout,
         "tcn_kernel_size": args.tcn_kernel_size,
+        "early_stopping_patience": args.early_stopping_patience,
+        "early_stopping_min_delta": args.early_stopping_min_delta,
         "device": str(device),
         "seed": args.seed,
         "train_sequences": len(train_dataset),
@@ -154,9 +170,13 @@ def run_train_stage(args) -> int:
             epochs=args.epochs,
             learning_rate=args.learning_rate,
             checkpoint_path=checkpoint_path,
+            early_stopping_patience=args.early_stopping_patience,
+            early_stopping_min_delta=args.early_stopping_min_delta,
         )
         pd.DataFrame(history).to_csv(metrics_dir / f"{model_name}_history.csv", index=False)
         best = min(history, key=lambda row: row["val_mse"])
+        stopped_epoch = int(history[-1]["epoch"])
+        early_stopped = bool(history[-1].get("early_stop_triggered", False))
         try:
             state_dict_path = checkpoint_path.relative_to(run_dir)
         except ValueError:
@@ -176,6 +196,10 @@ def run_train_stage(args) -> int:
             "state_dict_path": str(state_dict_path),
             "best_epoch": int(best["epoch"]),
             "best_val_mse": float(best["val_mse"]),
+            "stopped_epoch": stopped_epoch,
+            "early_stopped": early_stopped,
+            "early_stopping_patience": args.early_stopping_patience,
+            "early_stopping_min_delta": args.early_stopping_min_delta,
         }
         write_json(checkpoints_dir / f"{model_name}_checkpoint.json", checkpoint_payload)
         summary[model_name] = checkpoint_payload

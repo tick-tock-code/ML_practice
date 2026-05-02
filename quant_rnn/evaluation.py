@@ -8,6 +8,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from .backtest import make_weights, strategy_returns
+from .baselines import baseline_predictions, equal_weight_weights
 from .constants import DEFAULT_FEATURE_COLUMNS, TARGET_COLUMN
 from .io import ensure_dir, parse_csv_list, read_json, write_json
 from .metrics import daily_information_coefficient, regression_metrics
@@ -81,11 +82,64 @@ def plot_cumulative_return(daily: pd.DataFrame, output_path: Path, title: str) -
     plt.close()
 
 
+def evaluate_prediction_frame(
+    predictions: pd.DataFrame,
+    label: str,
+    strategies: list[str],
+    evaluation_dir: Path,
+    tc_bps: float,
+    low_quantile: float,
+    high_quantile: float,
+    gross_exposure: float,
+) -> list[dict[str, float | str]]:
+    rows: list[dict[str, float | str]] = []
+    predictions_path = evaluation_dir / f"{label}_predictions.parquet"
+    predictions.to_parquet(predictions_path, index=False)
+    model_metrics = regression_metrics(predictions["target"], predictions["prediction"])
+    model_metrics["daily_ic"] = daily_information_coefficient(predictions)
+    write_json(evaluation_dir / f"{label}_metrics.json", model_metrics)
+
+    for strategy in strategies:
+        weighted = make_weights(
+            predictions,
+            strategy,
+            low_quantile=low_quantile,
+            high_quantile=high_quantile,
+            gross_exposure=gross_exposure,
+        )
+        weighted.to_parquet(evaluation_dir / f"{label}_{strategy}_weights.parquet", index=False)
+        daily, stats = strategy_returns(weighted, tc_bps=tc_bps)
+        daily.to_csv(evaluation_dir / f"{label}_{strategy}_daily_returns.csv", index=False)
+        write_json(evaluation_dir / f"{label}_{strategy}_stats.json", stats)
+        plot_cumulative_return(daily, evaluation_dir / f"{label}_{strategy}_cum_return.png", title=f"{label} {strategy}")
+        rows.append({"model": label, "strategy": strategy, **model_metrics, **stats})
+        print(f"Evaluated {label}/{strategy}: Sharpe={stats['sharpe']:.4f}")
+    return rows
+
+
+def evaluate_equal_weight_baseline(
+    predictions: pd.DataFrame,
+    evaluation_dir: Path,
+    tc_bps: float,
+    gross_exposure: float,
+) -> dict[str, float | str]:
+    weighted = equal_weight_weights(predictions, gross_exposure=gross_exposure)
+    weighted.to_parquet(evaluation_dir / "equal_weight_weights.parquet", index=False)
+    daily, stats = strategy_returns(weighted, tc_bps=tc_bps)
+    daily.to_csv(evaluation_dir / "equal_weight_daily_returns.csv", index=False)
+    write_json(evaluation_dir / "equal_weight_stats.json", stats)
+    plot_cumulative_return(daily, evaluation_dir / "equal_weight_cum_return.png", title="equal_weight")
+    print(f"Evaluated equal_weight: Sharpe={stats['sharpe']:.4f}")
+    return {"model": "equal_weight", "strategy": "equal_weight", **stats}
+
+
 def run_evaluate_stage(args) -> int:
     run_dir = Path(args.run_dir) if args.run_dir else latest_run_dir("runs")
     run_config = read_json(run_dir / "run_config.json")
     data_dir = Path(args.data_dir) if args.data_dir else Path(run_config["data_dir"])
     frame = pd.read_parquet(data_dir / "processed_scaled.parquet")
+    unscaled_path = data_dir / "processed_returns.parquet"
+    unscaled_frame = pd.read_parquet(unscaled_path) if unscaled_path.exists() else None
     feature_columns = run_config.get("feature_columns", DEFAULT_FEATURE_COLUMNS)
     sequence_length = int(run_config["sequence_length"])
 
@@ -95,6 +149,7 @@ def run_evaluate_stage(args) -> int:
 
     models = parse_csv_list(args.models) or list(run_config["models"])
     strategies = parse_csv_list(args.strategies)
+    baselines = parse_csv_list(args.baselines)
     device = choose_device(args.device)
     evaluation_dir = ensure_dir(run_dir / "evaluation")
 
@@ -102,33 +157,36 @@ def run_evaluate_stage(args) -> int:
     for model_name in models:
         model, metadata = load_model_from_checkpoint(model_name, run_dir, device)
         predictions = predict_dataset(model, test_dataset, args.batch_size, device)
-        predictions_path = evaluation_dir / f"{model_name}_predictions.parquet"
-        predictions.to_parquet(predictions_path, index=False)
-
-        model_metrics = regression_metrics(predictions["target"], predictions["prediction"])
-        model_metrics["daily_ic"] = daily_information_coefficient(predictions)
-        write_json(evaluation_dir / f"{model_name}_metrics.json", model_metrics)
-
-        for strategy in strategies:
-            weighted = make_weights(
+        summary_rows.extend(
+            evaluate_prediction_frame(
                 predictions,
-                strategy,
-                low_quantile=args.low_quantile,
-                high_quantile=args.high_quantile,
-                gross_exposure=args.gross_exposure,
+                model_name,
+                strategies,
+                evaluation_dir,
+                args.tc_bps,
+                args.low_quantile,
+                args.high_quantile,
+                args.gross_exposure,
             )
-            weighted.to_parquet(evaluation_dir / f"{model_name}_{strategy}_weights.parquet", index=False)
-            daily, stats = strategy_returns(weighted, tc_bps=args.tc_bps)
-            daily.to_csv(evaluation_dir / f"{model_name}_{strategy}_daily_returns.csv", index=False)
-            write_json(evaluation_dir / f"{model_name}_{strategy}_stats.json", stats)
-            plot_cumulative_return(
-                daily,
-                evaluation_dir / f"{model_name}_{strategy}_cum_return.png",
-                title=f"{model_name} {strategy}",
+        )
+
+    for baseline in baselines:
+        predictions = baseline_predictions(baseline, test_dataset, unscaled_frame)
+        if baseline == "equal_weight":
+            summary_rows.append(evaluate_equal_weight_baseline(predictions, evaluation_dir, args.tc_bps, args.gross_exposure))
+        else:
+            summary_rows.extend(
+                evaluate_prediction_frame(
+                    predictions,
+                    baseline,
+                    strategies,
+                    evaluation_dir,
+                    args.tc_bps,
+                    args.low_quantile,
+                    args.high_quantile,
+                    args.gross_exposure,
+                )
             )
-            row = {"model": model_name, "strategy": strategy, **model_metrics, **stats}
-            summary_rows.append(row)
-            print(f"Evaluated {model_name}/{strategy}: Sharpe={stats['sharpe']:.4f}")
 
     summary = pd.DataFrame(summary_rows)
     summary.to_csv(evaluation_dir / "evaluation_summary.csv", index=False)

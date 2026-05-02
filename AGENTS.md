@@ -9,6 +9,8 @@ Start with:
 - `quant_rnn/sequences.py` for sample construction and leakage boundaries.
 - `quant_rnn/models.py` for model registry.
 - `quant_rnn/training.py` and `quant_rnn/evaluation.py` for stages 2 and 3.
+- `quant_rnn/baselines.py` for cash, equal-weight, and momentum baselines.
+- `quant_rnn/walk_forward.py` for expanding-window retraining.
 
 Generated artifacts are ignored by git:
 
