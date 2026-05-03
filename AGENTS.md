@@ -11,6 +11,9 @@ Start with:
 - `quant_rnn/training.py` and `quant_rnn/evaluation.py` for stages 2 and 3.
 - `quant_rnn/baselines.py` for cash, equal-weight, and momentum baselines.
 - `quant_rnn/walk_forward.py` for expanding-window retraining.
+- `quant_rnn/aggregation.py` for validation summaries and selection comparisons from stored grid checkpoints.
+- `quant_rnn/seed_sweep.py` for repeated fixed-config training across random seeds.
+- `scripts/run_weight_decay_grid.py` for the reusable LSTM `1e-5` learning-rate weight-decay grid runner.
 
 Generated artifacts are ignored by git:
 

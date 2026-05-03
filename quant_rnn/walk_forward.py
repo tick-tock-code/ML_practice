@@ -96,6 +96,8 @@ def run_walk_forward_stage(args) -> int:
             "step_years": args.step_years,
             "sequence_length": args.sequence_length,
             "epochs": args.epochs,
+            "weight_decay": args.weight_decay,
+            "selection_metric": args.selection_metric,
             "early_stopping_patience": args.early_stopping_patience,
             "early_stopping_min_delta": args.early_stopping_min_delta,
             "feature_columns": DEFAULT_FEATURE_COLUMNS,
@@ -119,6 +121,7 @@ def run_walk_forward_stage(args) -> int:
         scaled_fold = apply_standard_scaler(fold_frame, scaler)
         write_json(fold_dir / "scaler.json", scaler)
         fold_meta = {key: value for key, value in fold.items() if key != "frame"}
+        fold_meta["weight_decay"] = args.weight_decay
         write_json(fold_dir / "fold_metadata.json", fold_meta)
         fold_manifest.append(fold_meta)
 
@@ -152,9 +155,11 @@ def run_walk_forward_stage(args) -> int:
                 checkpoint_path=checkpoint_path,
                 early_stopping_patience=args.early_stopping_patience,
                 early_stopping_min_delta=args.early_stopping_min_delta,
+                selection_metric=args.selection_metric,
+                weight_decay=args.weight_decay,
             )
             pd.DataFrame(history).to_csv(metrics_dir / f"{model_name}_history.csv", index=False)
-            best = min(history, key=lambda row: row["val_mse"])
+            best = min(history, key=lambda row: row[args.selection_metric]) if args.selection_metric == "val_mse" else max(history, key=lambda row: row[args.selection_metric])
             checkpoint_payload = {
                 "model_name": model_name,
                 "model_config": {
@@ -168,10 +173,16 @@ def run_walk_forward_stage(args) -> int:
                 "sequence_length": args.sequence_length,
                 "target_column": TARGET_COLUMN,
                 "state_dict_path": str(checkpoint_path.relative_to(fold_dir)),
+                "selection_metric": args.selection_metric,
+                "best_selection_value": float(best[args.selection_metric]),
                 "best_epoch": int(best["epoch"]),
                 "best_val_mse": float(best["val_mse"]),
+                "best_val_daily_ic": float(best["val_daily_ic"]),
+                "best_val_rank_long_short_sharpe": float(best["val_rank_long_short_sharpe"]),
+                "best_val_zscore_sharpe": float(best["val_zscore_sharpe"]),
                 "stopped_epoch": int(history[-1]["epoch"]),
                 "early_stopped": bool(history[-1].get("early_stop_triggered", False)),
+                "weight_decay": args.weight_decay,
             }
             write_json(checkpoints_dir / f"{model_name}_checkpoint.json", checkpoint_payload)
             model.load_state_dict(torch.load(checkpoint_path, map_location=device, weights_only=True))

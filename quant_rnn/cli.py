@@ -6,6 +6,8 @@ from .data import run_data_stage
 from .evaluation import run_evaluate_stage
 from .training import run_train_stage
 from .walk_forward import run_walk_forward_stage
+from .aggregation import run_aggregate_grid_stage
+from .seed_sweep import run_seed_sweep_stage
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -34,10 +36,16 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--epochs", type=int, default=50)
     train.add_argument("--batch-size", type=int, default=256)
     train.add_argument("--learning-rate", type=float, default=1e-3)
+    train.add_argument("--weight-decay", type=float, default=0.0)
     train.add_argument("--hidden-size", type=int, default=64)
     train.add_argument("--num-layers", type=int, default=1)
     train.add_argument("--dropout", type=float, default=0.0)
     train.add_argument("--tcn-kernel-size", type=int, default=3)
+    train.add_argument(
+        "--selection-metric",
+        default="val_daily_ic",
+        choices=["val_mse", "val_daily_ic", "val_rank_long_short_sharpe", "val_zscore_sharpe"],
+    )
     train.add_argument("--early-stopping-patience", type=int, default=5)
     train.add_argument("--early-stopping-min-delta", type=float, default=0.0)
     train.add_argument("--device", default="auto")
@@ -47,6 +55,7 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate = subparsers.add_parser("evaluate", help="Evaluate trained models on the test split.")
     evaluate.add_argument("--data-dir", default=None)
     evaluate.add_argument("--run-dir", default=None)
+    evaluate.add_argument("--split", choices=["val", "test"], default="test")
     evaluate.add_argument("--models", default=None)
     evaluate.add_argument("--strategies", default="rank_long_short,zscore")
     evaluate.add_argument("--baselines", default="cash_zero,equal_weight,momentum_12_1")
@@ -55,6 +64,9 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--low-quantile", type=float, default=0.2)
     evaluate.add_argument("--high-quantile", type=float, default=0.8)
     evaluate.add_argument("--gross-exposure", type=float, default=1.0)
+    evaluate.add_argument("--monotonicity-buckets", type=int, default=5)
+    evaluate.add_argument("--no-monotonicity", dest="monotonicity", action="store_false")
+    evaluate.set_defaults(monotonicity=True)
     evaluate.add_argument("--device", default="auto")
     evaluate.set_defaults(func=run_evaluate_stage)
 
@@ -72,10 +84,16 @@ def build_parser() -> argparse.ArgumentParser:
     walk.add_argument("--epochs", type=int, default=50)
     walk.add_argument("--batch-size", type=int, default=256)
     walk.add_argument("--learning-rate", type=float, default=1e-3)
+    walk.add_argument("--weight-decay", type=float, default=0.0)
     walk.add_argument("--hidden-size", type=int, default=64)
     walk.add_argument("--num-layers", type=int, default=1)
     walk.add_argument("--dropout", type=float, default=0.0)
     walk.add_argument("--tcn-kernel-size", type=int, default=3)
+    walk.add_argument(
+        "--selection-metric",
+        default="val_daily_ic",
+        choices=["val_mse", "val_daily_ic", "val_rank_long_short_sharpe", "val_zscore_sharpe"],
+    )
     walk.add_argument("--early-stopping-patience", type=int, default=5)
     walk.add_argument("--early-stopping-min-delta", type=float, default=0.0)
     walk.add_argument("--tc-bps", type=float, default=5.0)
@@ -85,6 +103,53 @@ def build_parser() -> argparse.ArgumentParser:
     walk.add_argument("--device", default="auto")
     walk.add_argument("--seed", type=int, default=42)
     walk.set_defaults(func=run_walk_forward_stage)
+
+    aggregate = subparsers.add_parser("aggregate-grid", help="Create validation and selection summaries from stored grid checkpoints.")
+    aggregate.add_argument("--runs-dir", default="runs")
+    aggregate.add_argument("--data-dir", default="data")
+    aggregate.add_argument("--run-pattern", default="grid_lr1e4_*")
+    aggregate.add_argument("--max-hidden-size", type=int, default=128)
+    aggregate.add_argument("--models", default="rnn,lstm,tcn")
+    aggregate.add_argument("--strategies", default="rank_long_short,zscore")
+    aggregate.add_argument("--batch-size", type=int, default=512)
+    aggregate.add_argument("--tc-bps", type=float, default=5.0)
+    aggregate.add_argument("--validation-output", default="runs/grid_lr1e4_validation_summary.csv")
+    aggregate.add_argument("--comparison-output", default="runs/grid_lr1e4_selection_comparison.csv")
+    aggregate.add_argument("--device", default="auto")
+    aggregate.set_defaults(func=run_aggregate_grid_stage)
+
+    seed = subparsers.add_parser("seed-sweep", help="Repeat one fixed training config across multiple random seeds.")
+    seed.add_argument("--data-dir", default="data")
+    seed.add_argument("--run-dir", default=None)
+    seed.add_argument("--models", default="lstm")
+    seed.add_argument("--seeds", default="1,2,3,4,5")
+    seed.add_argument("--strategies", default="rank_long_short,zscore")
+    seed.add_argument("--baselines", default="")
+    seed.add_argument("--sequence-length", type=int, default=60)
+    seed.add_argument("--epochs", type=int, default=30)
+    seed.add_argument("--batch-size", type=int, default=128)
+    seed.add_argument("--learning-rate", type=float, default=1e-4)
+    seed.add_argument("--weight-decay", type=float, default=1e-4)
+    seed.add_argument("--hidden-size", type=int, default=64)
+    seed.add_argument("--num-layers", type=int, default=2)
+    seed.add_argument("--dropout", type=float, default=0.2)
+    seed.add_argument("--tcn-kernel-size", type=int, default=3)
+    seed.add_argument(
+        "--selection-metric",
+        default="val_daily_ic",
+        choices=["val_mse", "val_daily_ic", "val_rank_long_short_sharpe", "val_zscore_sharpe"],
+    )
+    seed.add_argument("--early-stopping-patience", type=int, default=5)
+    seed.add_argument("--early-stopping-min-delta", type=float, default=0.0)
+    seed.add_argument("--tc-bps", type=float, default=5.0)
+    seed.add_argument("--low-quantile", type=float, default=0.2)
+    seed.add_argument("--high-quantile", type=float, default=0.8)
+    seed.add_argument("--gross-exposure", type=float, default=1.0)
+    seed.add_argument("--monotonicity-buckets", type=int, default=5)
+    seed.add_argument("--no-monotonicity", dest="monotonicity", action="store_false")
+    seed.set_defaults(monotonicity=True)
+    seed.add_argument("--device", default="auto")
+    seed.set_defaults(func=run_seed_sweep_stage)
 
     return parser
 

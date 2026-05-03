@@ -103,10 +103,12 @@ class BaselineAndWalkForwardTests(unittest.TestCase):
                 epochs=1,
                 batch_size=64,
                 learning_rate=1e-3,
+                weight_decay=1e-4,
                 hidden_size=4,
                 num_layers=1,
                 dropout=0.0,
                 tcn_kernel_size=3,
+                selection_metric="val_mse",
                 early_stopping_patience=2,
                 early_stopping_min_delta=0.0,
                 tc_bps=5.0,
@@ -120,6 +122,8 @@ class BaselineAndWalkForwardTests(unittest.TestCase):
             summary = Path(tmp_run) / "walk_forward" / "walk_forward_summary.csv"
             self.assertTrue(summary.exists())
             self.assertFalse(pd.read_csv(summary).empty)
+            fold_meta = pd.read_json(Path(tmp_run) / "walk_forward" / "fold_001" / "fold_metadata.json", typ="series")
+            self.assertEqual(float(fold_meta["weight_decay"]), 1e-4)
 
 
 if __name__ == "__main__":

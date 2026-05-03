@@ -13,14 +13,16 @@ data stage
 train stage
   processed_scaled.parquet
   -> pooled ticker/date sequence samples
-  -> RNN/LSTM/TCN checkpoints selected by validation loss
-  -> early stopping when validation MSE stops improving
+  -> RNN/LSTM/TCN checkpoints selected by configured validation metric
+  -> optional Adam weight decay regularization
+  -> early stopping when the configured validation metric stops improving
 
 evaluate stage
-  test split + saved checkpoints
+  validation/test split + saved checkpoints
   -> optional baseline prediction providers
   -> predictions
   -> rank and z-score weights
+  -> quintile monotonicity diagnostics
   -> daily returns, cumulative index, stats, plots
 
 walk-forward stage
@@ -29,6 +31,17 @@ walk-forward stage
   -> fold-local scaler fit on fold train rows
   -> train, validate, and test each fold
   -> aggregate walk_forward_summary.csv
+
+aggregate-grid stage
+  stored checkpoints
+  -> validation split predictions
+  -> validation summary
+  -> validation-selection vs test-outcome comparison
+
+seed-sweep stage
+  fixed model config + seed list
+  -> one child train/evaluate run per seed
+  -> aggregate validation/test seed_sweep_summary.csv
 ```
 
 ## Data Contract
@@ -72,8 +85,10 @@ equal_weight: direct long-only benchmark weights, no prediction ranking
 
 - Split boundaries are based on `target_date`.
 - Scalers are fit only on train rows.
-- Validation selects checkpoints.
+- Validation selects checkpoints and hyperparameters.
+- Selection metrics can be `val_mse`, `val_daily_ic`, `val_rank_long_short_sharpe`, or `val_zscore_sharpe`.
 - Test metrics and backtests run only in `evaluate`.
+- Repeat seeds test robustness to initialization/minibatch randomness; they are not a leakage control.
 - Sequences for validation/test may include earlier context rows, but never future feature rows.
 - Walk-forward retraining repeats these rules per fold.
 
@@ -91,7 +106,26 @@ runs/<timestamp>/
 |-- run_config.json
 |-- checkpoints/
 |-- metrics/
+|-- validation/
 `-- evaluation/
+
+runs/<timestamp>/validation/ or evaluation/
+|-- <model>_predictions.parquet
+|-- <model>_monotonicity.csv
+|-- <model>_monotonicity.png
+|-- <model>_<strategy>_weights.parquet
+`-- evaluation_summary.csv
+
+runs/seed_sweep_<timestamp>/
+|-- seed_sweep_config.json
+|-- seed_sweep_summary.csv
+|-- seed_001/
+|-- seed_002/
+`-- ...
+
+runs/
+|-- grid_lr1e4_validation_summary.csv
+`-- grid_lr1e4_selection_comparison.csv
 
 runs/<timestamp>/walk_forward/
 |-- fold_manifest.json

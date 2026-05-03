@@ -82,6 +82,58 @@ def plot_cumulative_return(daily: pd.DataFrame, output_path: Path, title: str) -
     plt.close()
 
 
+def assign_monotonicity_buckets(predictions: pd.DataFrame, buckets: int = 5) -> pd.DataFrame:
+    if buckets < 2:
+        raise ValueError("monotonicity buckets must be at least 2.")
+    rows = []
+    for _, group in predictions.groupby("target_date", sort=True):
+        group = group.sort_values(["prediction", "ticker"]).copy()
+        n_rows = len(group)
+        if n_rows == 0:
+            continue
+        positions = pd.Series(range(n_rows), index=group.index)
+        group["bucket"] = ((positions * buckets) // n_rows + 1).clip(upper=buckets).astype(int)
+        rows.append(group)
+    if not rows:
+        return predictions.assign(bucket=pd.Series(dtype=int))
+    return pd.concat(rows, ignore_index=True)
+
+
+def monotonicity_analysis(predictions: pd.DataFrame, buckets: int = 5) -> tuple[pd.DataFrame, float]:
+    bucketed = assign_monotonicity_buckets(predictions, buckets=buckets)
+    summary = (
+        bucketed.groupby("bucket", as_index=False)
+        .agg(
+            count=("target", "size"),
+            avg_target=("target", "mean"),
+            avg_prediction=("prediction", "mean"),
+            hit_rate=("target", lambda values: float((values > 0).mean())),
+        )
+        .sort_values("bucket")
+        .reset_index(drop=True)
+    )
+    if summary.empty or 1 not in set(summary["bucket"]) or buckets not in set(summary["bucket"]):
+        spread = float("nan")
+    else:
+        low = summary.loc[summary["bucket"] == 1, "avg_target"].iloc[0]
+        high = summary.loc[summary["bucket"] == buckets, "avg_target"].iloc[0]
+        spread = float(high - low)
+    return summary, spread
+
+
+def plot_monotonicity(summary: pd.DataFrame, output_path: Path, title: str) -> None:
+    plt.figure(figsize=(8, 5))
+    plt.bar(summary["bucket"].astype(str), summary["avg_target"])
+    plt.title(title)
+    plt.xlabel("Prediction bucket")
+    plt.ylabel("Average realized return")
+    plt.grid(True, axis="y")
+    plt.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(output_path)
+    plt.close()
+
+
 def evaluate_prediction_frame(
     predictions: pd.DataFrame,
     label: str,
@@ -91,12 +143,19 @@ def evaluate_prediction_frame(
     low_quantile: float,
     high_quantile: float,
     gross_exposure: float,
+    monotonicity: bool = True,
+    monotonicity_buckets: int = 5,
 ) -> list[dict[str, float | str]]:
     rows: list[dict[str, float | str]] = []
     predictions_path = evaluation_dir / f"{label}_predictions.parquet"
     predictions.to_parquet(predictions_path, index=False)
     model_metrics = regression_metrics(predictions["target"], predictions["prediction"])
     model_metrics["daily_ic"] = daily_information_coefficient(predictions)
+    if monotonicity:
+        monotonic_summary, spread = monotonicity_analysis(predictions, buckets=monotonicity_buckets)
+        monotonic_summary.to_csv(evaluation_dir / f"{label}_monotonicity.csv", index=False)
+        plot_monotonicity(monotonic_summary, evaluation_dir / f"{label}_monotonicity.png", title=f"{label} monotonicity")
+        model_metrics["monotonic_spread"] = spread
     write_json(evaluation_dir / f"{label}_metrics.json", model_metrics)
 
     for strategy in strategies:
@@ -143,20 +202,22 @@ def run_evaluate_stage(args) -> int:
     feature_columns = run_config.get("feature_columns", DEFAULT_FEATURE_COLUMNS)
     sequence_length = int(run_config["sequence_length"])
 
-    test_dataset = EquitySequenceDataset(frame, "test", sequence_length, feature_columns, TARGET_COLUMN)
-    if len(test_dataset) == 0:
-        raise ValueError("Test dataset contains no sequences.")
+    split = args.split
+    dataset = EquitySequenceDataset(frame, split, sequence_length, feature_columns, TARGET_COLUMN)
+    if len(dataset) == 0:
+        raise ValueError(f"{split} dataset contains no sequences.")
 
     models = parse_csv_list(args.models) or list(run_config["models"])
     strategies = parse_csv_list(args.strategies)
     baselines = parse_csv_list(args.baselines)
     device = choose_device(args.device)
-    evaluation_dir = ensure_dir(run_dir / "evaluation")
+    output_dir_name = "validation" if split == "val" else "evaluation"
+    evaluation_dir = ensure_dir(run_dir / output_dir_name)
 
     summary_rows = []
     for model_name in models:
         model, metadata = load_model_from_checkpoint(model_name, run_dir, device)
-        predictions = predict_dataset(model, test_dataset, args.batch_size, device)
+        predictions = predict_dataset(model, dataset, args.batch_size, device)
         summary_rows.extend(
             evaluate_prediction_frame(
                 predictions,
@@ -167,11 +228,13 @@ def run_evaluate_stage(args) -> int:
                 args.low_quantile,
                 args.high_quantile,
                 args.gross_exposure,
+                args.monotonicity,
+                args.monotonicity_buckets,
             )
         )
 
     for baseline in baselines:
-        predictions = baseline_predictions(baseline, test_dataset, unscaled_frame)
+        predictions = baseline_predictions(baseline, dataset, unscaled_frame)
         if baseline == "equal_weight":
             summary_rows.append(evaluate_equal_weight_baseline(predictions, evaluation_dir, args.tc_bps, args.gross_exposure))
         else:
@@ -185,6 +248,8 @@ def run_evaluate_stage(args) -> int:
                     args.low_quantile,
                     args.high_quantile,
                     args.gross_exposure,
+                    args.monotonicity,
+                    args.monotonicity_buckets,
                 )
             )
 

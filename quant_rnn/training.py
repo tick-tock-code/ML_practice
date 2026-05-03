@@ -9,11 +9,19 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader
 
+from .backtest import make_weights, strategy_returns
 from .constants import DEFAULT_FEATURE_COLUMNS, TARGET_COLUMN
 from .io import ensure_dir, parse_csv_list, read_json, timestamp_slug, write_json
-from .metrics import regression_metrics
+from .metrics import daily_information_coefficient, regression_metrics
 from .models import create_model
 from .sequences import EquitySequenceDataset
+
+SUPPORTED_SELECTION_METRICS = {
+    "val_mse": "min",
+    "val_daily_ic": "max",
+    "val_rank_long_short_sharpe": "max",
+    "val_zscore_sharpe": "max",
+}
 
 
 def choose_device(requested: str) -> torch.device:
@@ -42,6 +50,51 @@ def evaluate_model(model: nn.Module, loader: DataLoader, device: torch.device) -
     return regression_metrics(targets, preds)
 
 
+def validation_prediction_frame(model: nn.Module, loader: DataLoader, device: torch.device) -> pd.DataFrame:
+    model.eval()
+    rows = []
+    dataset = loader.dataset
+    with torch.no_grad():
+        for x, y, indices in loader:
+            output = model(x.to(device)).detach().cpu().numpy()
+            for pred, target, sample_index in zip(output, y.numpy(), indices.numpy()):
+                metadata = dataset.sample_metadata(int(sample_index))
+                rows.append(
+                    {
+                        "ticker": metadata.ticker,
+                        "date": metadata.date,
+                        "target_date": metadata.target_date,
+                        "target": float(target),
+                        "prediction": float(pred),
+                    }
+                )
+    return pd.DataFrame(rows)
+
+
+def validation_selection_metrics(model: nn.Module, loader: DataLoader, device: torch.device) -> dict[str, float]:
+    predictions = validation_prediction_frame(model, loader, device)
+    metrics = regression_metrics(predictions["target"], predictions["prediction"])
+    out = {f"val_{key}": value for key, value in metrics.items()}
+    out["val_daily_ic"] = daily_information_coefficient(predictions)
+    for strategy in ["rank_long_short", "zscore"]:
+        weighted = make_weights(predictions, strategy)
+        _, stats = strategy_returns(weighted, tc_bps=5.0)
+        out[f"val_{strategy}_sharpe"] = stats["sharpe"]
+    return out
+
+
+def metric_improved(metric: str, value: float, best_value: float, min_delta: float) -> bool:
+    if metric not in SUPPORTED_SELECTION_METRICS:
+        raise ValueError(f"Unsupported selection metric '{metric}'. Expected one of {sorted(SUPPORTED_SELECTION_METRICS)}")
+    if not np.isfinite(value):
+        return False
+    if not np.isfinite(best_value):
+        return True
+    if SUPPORTED_SELECTION_METRICS[metric] == "min":
+        return value < best_value - min_delta
+    return value > best_value + min_delta
+
+
 def train_model(
     model: nn.Module,
     train_loader: DataLoader,
@@ -52,11 +105,15 @@ def train_model(
     checkpoint_path: Path,
     early_stopping_patience: int | None = 5,
     early_stopping_min_delta: float = 0.0,
+    selection_metric: str = "val_daily_ic",
+    weight_decay: float = 0.0,
 ) -> list[dict[str, float]]:
+    if selection_metric not in SUPPORTED_SELECTION_METRICS:
+        raise ValueError(f"Unsupported selection metric '{selection_metric}'. Expected one of {sorted(SUPPORTED_SELECTION_METRICS)}")
     model.to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     loss_fn = nn.MSELoss()
-    best_val = float("inf")
+    best_selection_value = float("inf") if SUPPORTED_SELECTION_METRICS[selection_metric] == "min" else -float("inf")
     epochs_without_improvement = 0
     history: list[dict[str, float]] = []
 
@@ -73,23 +130,24 @@ def train_model(
             optimizer.step()
             train_losses.append(float(loss.detach().cpu()))
 
-        val_metrics = evaluate_model(model, val_loader, device)
+        val_metrics = validation_selection_metrics(model, val_loader, device)
         row = {
             "epoch": epoch,
             "train_loss": float(np.mean(train_losses)) if train_losses else float("nan"),
-            **{f"val_{key}": value for key, value in val_metrics.items()},
-            "best_val_mse": best_val,
+            **val_metrics,
+            "selection_metric": selection_metric,
+            "best_selection_value": best_selection_value,
             "epochs_without_improvement": epochs_without_improvement,
             "early_stop_triggered": False,
         }
-        if row["val_mse"] < best_val - early_stopping_min_delta:
-            best_val = row["val_mse"]
+        if metric_improved(selection_metric, float(row[selection_metric]), best_selection_value, early_stopping_min_delta):
+            best_selection_value = float(row[selection_metric])
             epochs_without_improvement = 0
             checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
             torch.save(model.state_dict(), checkpoint_path)
         else:
             epochs_without_improvement += 1
-        row["best_val_mse"] = best_val
+        row["best_selection_value"] = best_selection_value
         row["epochs_without_improvement"] = epochs_without_improvement
         history.append(row)
         if early_stopping_patience is not None and epochs_without_improvement >= early_stopping_patience:
@@ -134,10 +192,12 @@ def run_train_stage(args) -> int:
         "epochs": args.epochs,
         "batch_size": args.batch_size,
         "learning_rate": args.learning_rate,
+        "weight_decay": args.weight_decay,
         "hidden_size": args.hidden_size,
         "num_layers": args.num_layers,
         "dropout": args.dropout,
         "tcn_kernel_size": args.tcn_kernel_size,
+        "selection_metric": args.selection_metric,
         "early_stopping_patience": args.early_stopping_patience,
         "early_stopping_min_delta": args.early_stopping_min_delta,
         "device": str(device),
@@ -172,9 +232,14 @@ def run_train_stage(args) -> int:
             checkpoint_path=checkpoint_path,
             early_stopping_patience=args.early_stopping_patience,
             early_stopping_min_delta=args.early_stopping_min_delta,
+            selection_metric=args.selection_metric,
+            weight_decay=args.weight_decay,
         )
         pd.DataFrame(history).to_csv(metrics_dir / f"{model_name}_history.csv", index=False)
-        best = min(history, key=lambda row: row["val_mse"])
+        if SUPPORTED_SELECTION_METRICS[args.selection_metric] == "min":
+            best = min(history, key=lambda row: row[args.selection_metric])
+        else:
+            best = max(history, key=lambda row: row[args.selection_metric])
         stopped_epoch = int(history[-1]["epoch"])
         early_stopped = bool(history[-1].get("early_stop_triggered", False))
         try:
@@ -194,12 +259,18 @@ def run_train_stage(args) -> int:
             "sequence_length": args.sequence_length,
             "target_column": TARGET_COLUMN,
             "state_dict_path": str(state_dict_path),
+            "selection_metric": args.selection_metric,
+            "best_selection_value": float(best[args.selection_metric]),
             "best_epoch": int(best["epoch"]),
             "best_val_mse": float(best["val_mse"]),
+            "best_val_daily_ic": float(best["val_daily_ic"]),
+            "best_val_rank_long_short_sharpe": float(best["val_rank_long_short_sharpe"]),
+            "best_val_zscore_sharpe": float(best["val_zscore_sharpe"]),
             "stopped_epoch": stopped_epoch,
             "early_stopped": early_stopped,
             "early_stopping_patience": args.early_stopping_patience,
             "early_stopping_min_delta": args.early_stopping_min_delta,
+            "weight_decay": args.weight_decay,
         }
         write_json(checkpoints_dir / f"{model_name}_checkpoint.json", checkpoint_payload)
         summary[model_name] = checkpoint_payload
